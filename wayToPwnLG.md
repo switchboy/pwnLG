@@ -94,7 +94,9 @@ Hook script (`telemetry-block.sh` in this repo):
   `acrcomponent`, `acroverlay`, `acrhdmi1-4`, `adoverlay`, `adoverlayex`,
   `adhdmi1-4`, `care365`, `dangbei-card`, `dangbei-overlay`, `com.webos.app.voice`
 - deletes persistent ACR consent flags (`/var/luna/preferences/ACR_Launched`, `FirstPOPUPACR`)
-- adds `snu-dev/snu-ssl/nsu.lge.com` to the boot-regenerated hosts blocklist
+- adds `snu-dev`/`snu-ssl.lge.com` to the boot-regenerated hosts blocklist
+  (`nsu.lge.com` is deliberately NOT blocked — it is the Content Store API; blocking
+  it broke store search and app installs)
 
 Verified after reboot: 0 telemetry processes, units inactive/failed, hooks re-applied.
 Side effect: LG voice control / Alexa voice input dead (that's the point — the mic pipeline is disabled).
@@ -107,16 +109,23 @@ Same hook (see `telemetry-block.sh` in this repo) bind-blocks — every boot, ~4
   weather helper, `membership`, `assetmanager`, LG remote management
   (`remoteservice/remotesetting`), update UI app, voice-assistant UI
   (Google/Alexa/voiceagent), demo+example junk apps
-- exploit service `jsservicelauncher` (closes the jsserver attack surface)
+- **NOT** blocked: `jsservicelauncher` — webOS's JS service launcher. Homebrew's own
+  service runs through it, so blocking it left the Homebrew UI greyed (install button,
+  SSH toggle) with root status stuck on "pending". The jsserver attack surface is
+  instead closed by keeping the Developer Mode app uninstalled (dev-mode SSH 9922 stays
+  closed and never gets re-enabled).
 Kept: home dashboard, liveTV/tuner, HDMI inputs, browsers, store, screensaver
 (OLED burn-in protection!), notifications, your real store apps.
-Ad payloads also can't download: all LG SNU/NSU hosts resolve to localhost.
+Ad payloads also can't download: LG `SNU`/`SU` hosts resolve to localhost.
+(`NSU` stays reachable on purpose — store API.)
 Finish in the UI: long-press dashboard cards → remove leftovers; uninstall
 unwanted store apps. Verified: survives reboot, TV boots fine, ads gone.
 
 ## 7. Updates disabled
-Homebrew Channel setting "Block system updates" + our extra hosts entries
-blackhole `snu*.lge.com`, `su*.lge.com`, `nsu.lge.com` → no OTA, no update nag.
+Homebrew Channel app → Settings → toggle **Block system updates** (and turn **SSH
+server** ON, confirmed in the UI after reboot). Plus our extra hosts entries
+blackhole `snu*.lge.com` and `su*.lge.com` → no OTA, no update nag.
+(`nsu.lge.com` stays reachable — it's the store API.)
 Router-level DNS blocking of the same domains closes the early-boot gap.
 
 ## 8. Rollback

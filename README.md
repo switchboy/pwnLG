@@ -39,8 +39,9 @@ home-screen slop and OTA update nags — all with reversible, userspace-only tri
 | Content recognition (ACR) off | ✅ | ACR apps bind-blocked, consent flags deleted |
 | Ad overlays gone | ✅ | `adoverlay/ex`, `adhdmi1-4`, dangbei ad framework blocked; ad/update hosts blackholed |
 | Home-screen slop purged | ✅ | Recommendation engine (`cdp-30`), content hubs, sports/weather/membership services |
-| OTA updates disabled | ✅ | All LG `snu/su/nsu` endpoints resolve to localhost, regenerated at every boot |
-| Exploit door closed | ✅ | `jsservicelauncher` locked down after rooting (security bonus) |
+| OTA updates disabled | ✅ | LG firmware-update endpoints (`snu/su/snu-dev/snu-ssl`) resolve to localhost, regenerated at every boot — **`nsu.lge.com` stays reachable** (it's the Content Store API) |
+| Homebrew keeps working | ✅ | `jsservicelauncher` deliberately left alive — it's webOS's JS service launcher; blocking it greyed out the Homebrew UI and froze root status at "pending" |
+| Exploit door closed | ✅ | Security comes from keeping the **Developer Mode app uninstalled** (dev-mode SSH port 9922 stays closed); never reinstall it while rooted |
 | Windows support | ✅ | `pwnPatcher.bat` gives the same one-click experience |
 | Android TV port research | 🔬 | Feasibility study + extracted hardware blobs (see below) |
 
@@ -127,8 +128,12 @@ Home menu → Developer Mode app → Remove. The patcher polls the TV every 5s a
 reboots once it's gone. **Never reboot with it installed.**
 
 ### Step 5 — Done
-~60 s after the reboot the patcher verifies and prints SUCCESS. Long-press leftover
-home-screen cards → delete; uninstall unwanted store apps yourself. Voice control is
+~60 s after the reboot the patcher verifies and prints SUCCESS.
+**Then open the Homebrew Channel app on the TV → Settings:**
+- enable **SSH server** (toggle ON — the patcher pre-arms the flag, but confirm it in the UI)
+- enable **Block system updates** (toggle ON; update endpoints are hosts-blocked anyway)
+Long-press leftover home-screen cards → delete; reinstall store apps you removed
+(Content Store search works — `nsu.lge.com` stays reachable). Voice control is
 dead if you chose the voice block — that's intentional.
 
 ### Rollback (un-patch)
@@ -153,6 +158,8 @@ Bind mounts vanish at reboot; uninstall Homebrew Channel for fully stock.
 | No root after reboot | Developer Mode app was still installed at reboot → remove it, re-run patcher (safe) |
 | Voice control dead | you chose the voice block; intentional |
 | Patches don't re-apply after reboot | hook filename must have **no dot** (`run-parts` skips dotted names!) — keep `10-pwnpatch` |
+| Homebrew UI greyed: install button, SSH toggle grey, **root status stuck "pending"** | your hook blocked `jsservicelauncher` — that's webOS's JS service launcher and Homebrew needs it. Remove it from the block list, `umount /usr/palm/services/jsservicelauncher`, reboot |
+| Content Store search broken / apps vanish | your hosts blocklist contains `nsu.lge.com` — that's the **store API**, not an update endpoint. Remove it; block only `snu/su/snu-dev/snu-ssl` |
 
 </details>
 

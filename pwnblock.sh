@@ -14,7 +14,12 @@
 #   --screensaver  (default OFF: keep! protects OLED from burn-in)
 #   --notify     (default OFF: keep! Homebrew/system alerts)
 #   --account    (default OFF: keep! LG account sign-in)
-# Always-on: LG update/ad domain hosts blocklist, jsservicelauncher (exploit service) lockdown.
+# Always-on: LG firmware-update domain hosts blocklist (snu/su only — nsu.lge.com
+#   is the Content Store API and must stay reachable, or store search breaks).
+# NOTE: jsservicelauncher is deliberately NOT blocked. It is webOS's JS service
+#   launcher; Homebrew's own service needs it. Blocking it greyed out the Homebrew
+#   UI (install button, SSH toggle, root status stuck "pending"). Security instead
+#   comes from keeping the Developer Mode app uninstalled (dev-mode SSH port 9922 closed).
 
 LOG=/tmp/pwnblock.log
 exec >>"$LOG" 2>&1
@@ -137,14 +142,16 @@ if [ "$ACCOUNT" -eq 1 ]; then
   block_apps com.webos.app.homeconnect
 fi
 
-# 3) Security lockdown: close the jsserver exploit service (always).
-block_svcs jsservicelauncher
+# 3) jsservicelauncher stays ALIVE on purpose — it launches Homebrew's JS service.
+#    Blocking it kills the Homebrew Channel UI (install greyed, SSH toggle greyed,
+#    root status pending). Exploit surface is closed by keeping Dev Mode uninstalled.
 
-# 4) Hosts blocklist: LG update/ad endpoints resolve to localhost.
+# 4) Hosts blocklist: LG firmware-update endpoints resolve to localhost.
 #    Homebrew startup.sh bind-mounts a fresh /tmp/hosts onto /etc/hosts each boot.
-grep -q 'nsu.lge.com' /etc/hosts 2>/dev/null || {
-  echo '127.0.0.1 snu.lge.com su.lge.com su-ssl.lge.com su-dev.lge.com snu-dev.lge.com snu-ssl.lge.com nsu.lge.com' >> /etc/hosts
-  echo '::1 snu.lge.com su.lge.com su-ssl.lge.com su-dev.lge.com snu-dev.lge.com snu-ssl.lge.com nsu.lge.com' >> /etc/hosts
+#    Do NOT block nsu.lge.com — that is the Content Store API (store search dies).
+grep -q 'snu-dev.lge.com' /etc/hosts 2>/dev/null || {
+  echo '127.0.0.1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
+  echo '::1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
   echo "hosts blocklist applied"
 }
 

@@ -150,6 +150,7 @@ echo ============================================================
 echo   SUCCESS - TV rooted, spyware/ads/update-nags gone, reboot-safe.
 echo ============================================================
 echo   Root shell later:  ssh -p 22 -i pwn_ed25519 root@%TV_IP%
+echo   Homebrew Channel app: open Settings - turn ON 'SSH server' and 'Block system updates'.
 echo   Homebrew Channel app shows Root status ok.
 echo   Rollback: ssh in, delete /var/lib/webosbrew/init.d/10-pwnpatch, reboot.
 echo   NEVER reinstall the Developer Mode app while rooted!

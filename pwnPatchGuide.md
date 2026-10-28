@@ -90,12 +90,16 @@ then reboots the TV itself.
 
 ## Step 5 — Done
 After the reboot (~60 s) the script verifies everything and prints SUCCESS.
+**Now open the Homebrew Channel app on the TV → Settings:**
+- enable **SSH server** (toggle ON — the patcher pre-arms this flag, but confirm it in the UI)
+- enable **Block system updates** (toggle ON; update servers are hosts-blocked either way)
 From now on:
 - Root terminal anytime: `ssh -p 22 -i pwn_ed25519 root@<TV-IP>` (Linux/Windows, no password)
-- Homebrew Channel app on the TV shows **Root status: ok**
+- Homebrew Channel app on the TV shows **Root status: ok** (if it stays "pending" and buttons are greyed, see Troubleshooting — the `jsservicelauncher` block must be removed)
 - Updates: LG update servers are blackholed (localhost) — no OTA, no nags
+- Content Store: works — search the store and reinstall apps (e.g. Plex) yourself
 - Telemetry/ACR/voice uploaders: dead, re-blocked at every boot
-- Home screen: long-press leftover cards → delete; uninstall unwanted store apps yourself
+- Home screen: long-press leftover cards → delete
 
 ## Rollback (un-patch)
 ```sh
@@ -117,13 +121,18 @@ reboot        # bind mounts vanish; TV behaves stock again
 | Connection drops mid-reboot | normal — script waits 60 s and reconnects |
 | TV boots but patcher says no root | Dev Mode app was still installed at reboot — remove it, re-run patcher (re-running is safe) |
 | Voice control stopped working | you chose the voice block — that's intentional (mic pipeline disabled) |
+| Homebrew UI greyed (install button / SSH toggle grey, root status **pending**) | your hook blocked `jsservicelauncher` — webOS's JS service launcher, which Homebrew itself needs. Remove it from the hook, `umount /usr/palm/services/jsservicelauncher`, reboot |
+| Content Store search broken / store apps missing (e.g. Plex gone) | hosts blocklist contains `nsu.lge.com` = the **store API**. Delete that line from `/tmp/hosts` and the hook, reboot, then reinstall apps from the store |
 
 ## What exactly gets blocked (details)
 See `pwnblock.sh` header comments — every flag maps to one menu question.
-Always-on extras: LG update/ad domains (`snu*.lge.com`, `su*.lge.com`,
-`nsu.lge.com`) resolve to localhost; the exploit's own service
-(`jsservicelauncher`) is locked down for security; Homebrew's startup hook
-keeps upload spools read-only.
+Always-on extras: LG firmware-update domains (`snu.lge.com`, `su*.lge.com`,
+`snu-dev/snu-ssl`) resolve to localhost; `nsu.lge.com` is **NOT** blocked because
+it is the Content Store API (blocking it breaks store search); Homebrew's startup hook
+keeps upload spools read-only. `jsservicelauncher` is **NOT** blocked either — it is
+webOS's JS service launcher, and Homebrew's own service needs it to run (blocking it
+leaves the Homebrew UI greyed and root status stuck on "pending"). Security instead
+comes from never reinstalling the Developer Mode app.
 Deliberately kept (defaults): home dashboard, Live TV + tuner, HDMI/AV inputs,
 browser apps, Content Store, screensaver (OLED!), notifications, LG account,
 your real streaming apps.

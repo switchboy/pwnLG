@@ -39,3 +39,16 @@ uninstall unwanted store apps from the Content Store UI.
 ## Attempt 3 — (spare, if overlays still appear somewhere)
 Kill WAM processes rendering ad UI in init.d loop, or bind-block
 com.webos.app.homepage variant — not needed so far.
+
+## Correction after full testing (2026-10-28, post-reboot regression)
+Two items in Attempt 2 turned out to be self-inflicted and had to be reverted:
+- `jsservicelauncher` bind-block — it is webOS's **JS service launcher**, and Homebrew's
+  own service runs through it. Blocking it made the Homebrew Channel UI grey out
+  (install button + SSH toggle disabled) and left **root status stuck on "pending"**.
+  Fix: drop it from the hook, `umount /usr/palm/services/jsservicelauncher`, reboot.
+  The exploit surface is closed instead by keeping the Developer Mode app uninstalled.
+- `nsu.lge.com` hosts block — it is the **Content Store API**, not an update endpoint.
+  Blocking it broke store search/app installs. Fix: block only
+  `snu/su/snu-dev/snu-ssl`; leave `nsu.lge.com` reachable.
+Also note: sideloaded/dev-mode apps can disappear when the Developer Mode app is
+uninstalled — reinstall them (store search works again after the `nsu` fix).

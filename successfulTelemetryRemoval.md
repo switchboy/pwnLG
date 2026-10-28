@@ -19,8 +19,9 @@
      `dangbei-card`, `dangbei-overlay`, `com.webos.app.voice`.
    - Deletes persistent ACR consent flags
      (`/var/luna/preferences/ACR_Launched`, `FirstPOPUPACR`).
-   - Appends `snu-dev.lge.com`, `nsu.lge.com`, `snu-ssl.lge.com` to the
+   - Appends `snu-dev.lge.com`, `snu-ssl.lge.com` to the
      boot-regenerated `/etc/hosts` blocklist (bind-mounted by startup.sh).
+     `nsu.lge.com` must **not** be blocked — it's the Content Store API.
 
 ## Verified after reboot (2026-10-28)
 - `/tmp/telemetry-block.log` regenerated at boot → hook ran ✓

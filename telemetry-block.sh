@@ -63,13 +63,16 @@ for app in com.webos.app.premium com.webos.app.livedmost \
   fi
 done
 
-# 4c) Telemetry/exploit services: bind-empty their service dirs.
-#     jsservicelauncher = the jsserver exploit launcher -> closing it removes
-#     the attack surface. sportsalert/membership/assetmanager feed home-screen
-#     cards & ad assets; care365 service dirs collect usage data.
+# 4c) Telemetry services: bind-empty their service dirs.
+#     NOTE: jsservicelauncher is NOT blocked — it is webOS's JS service launcher,
+#     and Homebrew's service needs it (blocking it broke the Homebrew UI: install
+#     greyed, SSH toggle greyed, root status pending). Exploit surface is closed by
+#     keeping the Developer Mode app uninstalled (dev-mode SSH port 9922 stays shut).
+#     sportsalert/membership/assetmanager feed home-screen cards & ad assets;
+#     care365 service dirs collect usage data.
 for svc in com.webos.service.sportsalert com.webos.service.membership \
            com.webos.service.assetmanager com.webos.app.care365 \
-           com.webos.app.care365.service jsservicelauncher; do
+           com.webos.app.care365.service; do
   dir="/usr/palm/services/$svc"
   if [ -d "$dir" ] && ! grep -q " $dir " /proc/mounts; then
     mount --bind /tmp/.unwritable "$dir" && echo "blocked service: $svc"
@@ -89,11 +92,13 @@ done
 rm -f /var/luna/preferences/ACR_Launched /var/luna/preferences/FirstPOPUPACR
 echo "cleared ACR flags"
 
-# 6) Extend update/ad domain blocklist (startup.sh already bind-mounts /tmp/hosts
-#    onto /etc/hosts and blocks snu/su/su-dev/su-ssl; add remaining LG update hosts)
-grep -q 'nsu.lge.com' /etc/hosts 2>/dev/null || {
-  echo '127.0.0.1 snu-dev.lge.com nsu.lge.com snu-ssl.lge.com' >> /etc/hosts
-  echo '::1 snu-dev.lge.com nsu.lge.com snu-ssl.lge.com' >> /etc/hosts
+# 6) Extend update domain blocklist (startup.sh already bind-mounts /tmp/hosts onto
+#    /etc/hosts and blocks snu/su/su-dev/su-ssl; add the remaining update hosts).
+#    IMPORTANT: nsu.lge.com is the Content Store API — blocking it kills store
+#    search/install, so it must stay reachable.
+grep -q 'snu-dev.lge.com' /etc/hosts 2>/dev/null || {
+  echo '127.0.0.1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
+  echo '::1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
   echo "extended hosts blocklist"
 }
 
