@@ -1,0 +1,17 @@
+# Device-specific, private or legally sensitive — never commit
+backup/
+context.md
+
+# Credentials / key material
+webos_rsa
+pwn_ed25519
+pwn_ed25519.pub
+*.key
+
+# Exploit tooling downloaded at runtime
+slopbro/
+slopbro.zip
+
+# Runtime artifacts
+*.log
+*.bin
