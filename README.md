@@ -202,6 +202,8 @@ TV must be idle for app launch, Dev Mode app must be gone before first reboot.
 | `androidTvFeasibility.md` | Android TV port feasibility study |
 | `androidBootPlan.md` | Bare-metal Android TV bring-up plan: opt-in `kexec`, AOSP arm64, ION/gralloc alignment, recovery layers, milestone gates |
 | `phase0-survey.sh` | Read-only on-TV capability survey script (Phase 0) |
+| `phase1-build.sh` | Build recipe for LG's GPL kernel and GPU driver for this SoC (Phase 1) |
+| `phase1-findings.md` | Phase 1 results: kernel source, build fixes, `dma_buf_unified` allocator, vendor HAL verdict |
 | `phase0-findings.md` | Phase 0 results: platform, kernel config, storage limits, DTB carveouts, plan amendments |
 
 Deliberately **not** committed: device backups, hardware blobs, credentials,

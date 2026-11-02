@@ -181,28 +181,48 @@ and nothing blocks on it. Software recovery plus LG dumps carry the risk.
 
 ## Phase 1: kernel source and reproducible build
 
-1. Pull LG kernel source for OTAID `HE_DTV_W20O_AFABABAA`, firmware 04.64.00, from the LG
-   open-source portal. GPL release, matching this firmware.
-2. Confirm the source version matches `/proc/version` exactly.
-3. Build the stock config unchanged with the toolchain LG's build docs specify. Phase 0 says
-   the kernel was built with gcc 8.2.0, so an aarch64 gcc 8.2 cross toolchain is the target.
-   Diff the resulting `vermagic` against `/proc/version`. A clean match means out-of-tree
-   modules load without `--force-vermagic`. A mismatch means ABI problems and the project
-   stops here honestly.
-4. Read LG's ION driver source, specifically `CONFIG_ION_LG1K`, and extract heap IDs, heap
-   masks and named custom heaps. `mali_kbase.ko` references `ion_alloc`, `ion_map`,
-   `ion_flags`, `ion_id`, `ion_debugfs_init` and `tiler_heap_free`, so the tiler heap needs
-   explicit handling in the mapping table.
-5. Vendor firmware search, narrowed by Phase 0: look for LG builds on the `lg1k` / LG1212
-   platform that ship Android TV, not any LG Android TV. If such a build exists, reuse its
-   gralloc, hwcomposer and audio HAL plus its kernel config that already enables Android
-   options. If nothing on this platform ships Android, report that and write our own fb-based
-   HALs instead of forcing a mismatched vendor HAL onto this chip.
-6. Decide `kexec_file_load` versus `kexec_load`, and build the Android DTB from the LG
-   source tree rather than trusting kexec defaults.
+Status: DONE 2026-11-02. Findings in `phase1-findings.md`, recipe in `phase1-build.sh`.
+Source came from the LG portal release `osSeq=511222` file 2 for `OLED55CX6LA`, labelled
+"webOS 5.0 JO 2.0". Kernel `linux-4.4-lg115x` built with `lg1k_defconfig` using LG's bundled
+aarch64 gcc 6.2 toolchain, producing a 13.9 MB `Image`. `mali_kbase.ko` and
+`dma_buf_unified.ko` built against it. Two fixes were needed and are recorded in the recipe:
+the `yylloc` double definition in kernel 4.4 host `dtc`, and LG's wrapper Makefile with a
+broken `KCONFIG_CONFIG` reference that resolves to `/config_data.gz`.
 
-Deliverables: kernel build recipe, `android.cfg` config fragment, ION heap-to-gralloc
-mapping table, DTB build recipe, vendor-firmware finding.
+Caveat worth keeping in front of everyone: the published release is JO 2.0 from 2022, our
+firmware is 04.64.00 built in 2026. Base version `4.4.84` and platform `lg115x` /
+`o20_pioneer` match, but driver revisions should be compared against the TV's
+`/proc/config.gz` when it is reachable. Our build uses gcc 6.2 while the running kernel used
+gcc 8.2, and our release string lacks LG's `-219.jcl4tvmr.6` suffix. That is acceptable
+because we boot our own kernel, but modules built here will not load into the stock kernel.
+
+What Phase 1 actually established:
+
+1. Kernel source and toolchain obtained and built successfully. Reproducible build works.
+2. `drivers/android/binder.c` and `drivers/staging/android/ashmem.c` exist in this tree, so
+   binder and ashmem can be enabled in our kernel build even though stock config has them off.
+3. `lg1k_defconfig` already carries `CONFIG_ANDROID=y`, `CONFIG_ION=y`, `CONFIG_ION_LG1K=y`,
+   `CONFIG_MODULES=y`, `CONFIG_KEXEC=y`, `CONFIG_USB_STORAGE=y`, `CONFIG_FB=y`.
+4. Allocator truth: LG's ION registers only `system` and `system contig` heaps, and the
+   comment says memory separation happens in the bootloader. LG's GPU-facing allocator is
+   `drivers/base/dma_buf_unified`, a misc device with alloc, import, status and sync ioctls
+   that exports dma-buf fds. `mali_kbase` imports buffers via `dma_buf_get(fd)` and stores
+   them as `imported.umm.dma_buf`. So gralloc allocates through `/dev/dma_buf_unified` and
+   hands out the exported fd. Fallback, if that node is unavailable or restricted: register a
+   carveout heap in our kernel build over the DT reserved regions (`0x33800000`, 1.24 GB, and
+   `0xa9800000`, 360 MB) and allocate through ION `CARVEOUT`.
+5. GPU coherence: kernel kbase references Mali-G51/G71/G72, `libmali.so.0.1` references
+   `bifrost` and Mali-G51. Kernel driver and userspace DDK line up.
+6. Vendor HAL reuse: no LG Android TV firmware exists on the `lg1k` / LG1212 / O20 platform as
+   far as we can tell. There is no vendor gralloc, hwcomposer or audio HAL to lift. Our own
+   HALs are required, with gralloc built on `dma_buf_unified`. That is a real estimate, not a
+   shortcut.
+7. `kexec_load` is the available interface. Android DTB is built from the LG source tree and
+   passed explicitly.
+
+Deliverables produced: kernel build recipe, GPU module build, DTB dump and decompile, vendor
+firmware finding. Still owed: `android.cfg` config fragment, gralloc constraint table for
+`dma_buf_unified`, DTB build recipe with Android additions.
 
 Gate G1: reproducible stock kernel build with matching vermagic, and the heap map exists.
 If vermagic does not match, nothing downstream is attempted.
@@ -214,8 +234,11 @@ If vermagic does not match, nothing downstream is attempted.
 Kernel changes on top of LG source, per Phase 0 findings:
 - Binder IPC built-in, `CONFIG_ANDROID_BINDER_IPC=y` plus `CONFIG_ANDROID_BINDERFS=y`, and
   `CONFIG_ASHMEM=y`. Stock has none of these, and modules are only a fallback.
-- LG's ION kept (`CONFIG_ION=y`, `CONFIG_ION_LG1K=y`) as the allocator path. No dma-buf
-  heaps exist in stock, so Android's legacy ION gralloc path is the target.
+- LG's ION kept (`CONFIG_ION=y`, `CONFIG_ION_LG1K=y`) as the fallback allocator path, plus
+  LG's `drivers/base/dma_buf_unified` built into the Android kernel as the primary allocator
+  path, which is what gralloc allocates through and what mali_kbase imports
+- Android's legacy ION gralloc path only as the fallback, since LG's ION exposes just
+  `system` and `system contig` heaps and the stock config has no dma-buf heaps
 - mali kbase kept as a platform device, with cmdline `hma=` and `lg1k.` parameters intact
   and the DT `reserved-memory` carveouts preserved. There is no DT GPU node, so kbase probes
   through LG's platform device code, not through the device tree.
@@ -326,13 +349,20 @@ Android kernel (already covered by G2's on-device test).
 
 Graphics:
 - `mali_kbase.ko` loads in the Android kernel as LG's platform device, with cmdline `hma=`
-  regions and DT `reserved-memory` carveouts intact
-- gralloc allocates through LG's ION driver (`CONFIG_ION_LG1K`) using the exact heap IDs and
-  masks read from source in Phase 1, and those buffers must be accepted by `libmali.so.0.1`
-- `tiler_heap` handled explicitly in the mapping table
+  regions and DT `reserved-memory` carveouts intact. Built from LG source in Phase 1, and it
+  matches the userspace DDK on this GPU (G51 / Bifrost)
+- gralloc allocates through LG's `dma_buf_unified` misc device, using its alloc and import
+  ioctls, and hands out the exported dma-buf fd, which is what `mali_kbase` imports as
+  `imported.umm.dma_buf`. This replaces the earlier ION heap-alignment plan, because LG's ION
+  on this platform only exposes `system` and `system contig` heaps
+- Fallback allocator if `/dev/dma_buf_unified` turns out to be unavailable or restricted:
+  register a carveout heap in our kernel build over the DT reserved regions and allocate
+  through ION `CARVEOUT`
 - hwcomposer targets the framebuffer stack (`/dev/fb0`, `/dev/dc_fbdev`), since the stock
   kernel has no DRM at all. Mode set, vsync, hotplug and HDMI input events all go through fb
 - EGL/GLES stack validated against `libmali.so.0.1` plus `libEGLfk.so` semantics
+- No vendor HALs exist for this platform, so gralloc, hwcomposer and audio HAL are ours to
+  write. Expect this to be the bulk of the work, not a port job
 
 Audio:
 - ALSA HAL over the stock sound stack, HDMI audio output included
@@ -407,10 +437,10 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 |---|---|---|
 | G0 | DONE 2026-11-02. Survey complete: aarch64 Cortex-A55, 3 GiB RAM, `CONFIG_KEXEC=y`, `CONFIG_ION_LG1K=y`, framebuffer stack (no DRM), `snps,dwmac` Ethernet, LG dump params, DTB dumped | Phase 1 |
 | G0b | USB stick verified: webOS mounts partition 1 (FAT/exFAT), throughput measured, PARTUUID stable across reboots and replug, Android kernel USB storage enabled, ext4 partition untouched by webOS | Phases 2-5 |
-| G1 | Reproducible stock kernel build, vermagic match, ION heap map extracted | Phases 2-3 |
+| G1 | DONE 2026-11-02. Kernel and GPU driver build reproducibly from LG source. Deviations noted: gcc 6.2 versus stock 8.2, release string lacks LG suffix, published release is JO 2.0 versus our 2026 firmware | Phases 2-3 |
 | G2 | Android boots to init plus sshd via kexec and returns to webOS | Graphics work |
 | G3 | Hang plus power cycle leaves readable logs plus LG crash dumps from webOS | Any auto-boot hook |
-| G4 | gralloc ION allocations accepted by mali_kbase | hwcomposer and UI |
+| G4 | gralloc allocations via `dma_buf_unified` accepted by mali_kbase | hwcomposer and UI |
 | G5 | SurfaceFlinger plus HDMI on screen, audio alive, apps usable | Tuner phase |
 | G6 | Repeated cycles, no partition writes, webOS unaffected | Shipping anything persistent |
 
@@ -442,24 +472,25 @@ path. This is a separate RE project with its own plan. Do not start it before G5
    prerequisite for every storage step, and Phase 0.5 verifies it on the TV
 2. Wired Ethernet cable on the TV. `eth0` currently has no carrier, and it is the planned
    debug path, so bring-up needs a cable rather than Wi-Fi
-3. LG kernel source for firmware 04.64.00 / `HE_DTV_W20O_AFABABAA`
-4. aarch64 gcc 8.2 cross toolchain to match `/proc/version`, plus LG's build docs
-5. `lg1k` / LG1212 Android TV firmware check for vendor HAL reuse (narrowed by Phase 0)
-6. AOSP trim decisions, mainly to keep the squashfs system image under the FAT single-file
+3. TV reachable again, for the follow-ups listed in `phase1-findings.md`: full
+   `/proc/config.gz` dump, stock versus published source config comparison, and whether
+   `/dev/dma_buf_unified` exists on the running kernel
+4. `android.cfg` config fragment plus the gralloc constraint table for `dma_buf_unified`
+5. AOSP trim decisions, mainly to keep the squashfs system image under the FAT single-file
    limit if webOS only mounts FAT32
-7. Optional internal UART pin hunt when the chassis is open
-8. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
+6. Optional internal UART pin hunt when the chassis is open
+7. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
 
 ---
 
 ## Honest risk statement
 
-The plan is reachable, but the honest failure point is Gate G4. ION heap alignment with
-`mali_kbase` plus `libmali` is the whole ballgame, and vendor HAL reuse may or may not be
-available for the `lg1k` platform. Everything before G4 is plumbing we can verify safely.
-Everything after G4 depends on LG's proprietary graphics stack cooperating with Android's
-allocator. If G4 fails, the truthful outcome is "bare-metal Android on this firmware is not
-achievable without LG's own Android TV HALs for this chip", and we stop there.
+The plan is reachable, but the honest failure point is Gate G4. LG's GPU-facing allocator is
+`dma_buf_unified`, and Android's gralloc has to be written against it by us, since no LG
+Android TV firmware exists on this chipset family to lift HALs from. Everything before G4 is
+plumbing we can verify safely. Everything after G4 depends on our HAL feeding `libmali` and
+`mali_kbase` buffers they accept. If G4 fails, the truthful outcome is "bare-metal Android on
+this firmware needs a vendor graphics HAL that LG does not publish", and we stop there.
 
 The secondary constraint was storage, not graphics, and the USB stick resolves it. The
 residual risks are operational rather than architectural: a slow stick makes every boot
