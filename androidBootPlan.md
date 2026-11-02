@@ -32,8 +32,16 @@ persistence), `pwnblock.sh` / `telemetry-block.sh` (boot hooks).
 | SoC is `chip=O20B0`, vendor ARM64 | Device tree, power domains, clock controllers and GPU bring-up are all LG-specific. Nothing generic applies. |
 | `mali_kbase.ko` allocates through ION and exports dma-buf | Gralloc becomes an ION heap-mask alignment task, not a memory-stack RE project. |
 | `console=ttyAMA0,115200n81` in the stock cmdline | A UART is configured in the kernel. Internal pins may exist on the mainboard. Nice to have, not required. |
-| Stock cmdline has `mmcoops=dump` and `wdtlog=dump@1M` | LG already writes kernel crash and watchdog dumps to storage. Free recovery layer, readable after a hard reboot into webOS. |
+| Stock cmdline has `mmcoops=dump` and `wdtlog=dump@1M` | LG already writes kernel crash and watchdog dumps to storage. Free recovery layer, readable after a hard reboot into webOS. These are LG drivers, so they must be carried into our Android kernel build. |
 | Stock cmdline has `snapshot resume=/dev/mmcblk0p51` | Android cmdline must drop `resume=` and snapshot settings, or Android may try to resume into a webOS suspend image. |
+| Phase 0 confirmed: `CONFIG_DRM is not set`, `/dev/fb0`..`/dev/fb3` and `dc_fbdev` exist | The display target is framebuffer, not DRM. Android hwcomposer must be fb-based. |
+| Phase 0 confirmed: `CONFIG_ION=y` plus `CONFIG_ION_LG1K=y`, no dma-buf heaps in stock config | Gralloc targets LG's ION driver through Android's legacy ION path, not dma-buf heaps. |
+| Phase 0 confirmed: `CONFIG_KEXEC=y` but no `CONFIG_KEXEC_FILE` | `kexec_load` only, so the DTB must be passed explicitly with `--dtb=`. |
+| Phase 0 confirmed: `CONFIG_MODULE_SIG is not set` | Unsigned modules load, which keeps an out-of-tree fallback open. Primary plan is built-in binder and ashmem in our kernel. |
+| Phase 0 confirmed: `/var` has only 481 MB free | A full AOSP rootfs cannot live on disk. Compressed images in `/var`, unpacked into RAM by the Android initramfs, `/data` in RAM during bring-up. |
+| DTB declares `kdrv_buffer1@1` (0x33800000, 1.24 GB) and `kdrv_buffer2@2` (0xa9800000, 360 MB) as `no-map` carveouts | These are LG's CMA and HMA regions. Our Android kernel reuses them instead of inventing new reserved regions, and keeps cmdline `hma=` plus `lg1k.` parameters because LG's kbase probes as a platform device with no DT GPU node. |
+| DTB declares 4x Cortex-A55, `nproc` reports 3 online, 3 GiB physical RAM | arm64 with NEON, AES, SHA1/SHA2, atomics. Memory budget for Android is about 2.4 GB once webOS is gone. |
+| DTB declares `lge,lg115x-dwmac` plus `ethernet-phy-id0044.1400` | Wired Ethernet bring-up is standard `snps,dwmac` work. `eth0` currently has no carrier, so the TV needs a cable for the debug path. |
 
 ---
 
@@ -54,8 +62,9 @@ partitions. A hard Android hang is recovered by power cycling into stock webOS.
 Quick Start+ stays off so power-off is a real reboot. Developer Mode app stays
 uninstalled forever.
 
-`kexec_file_load` is preferred if `CONFIG_KEXEC_FILE` exists (better DTB handling).
-Legacy `kexec_load` is the fallback, with an explicit `--dtb=` argument.
+`kexec_file_load` is unavailable on this kernel (Phase 0: no `CONFIG_KEXEC_FILE`), so
+legacy `kexec_load` is the path and the DTB must be passed explicitly with `--dtb=` using
+the dump from `backup/stock_tv.dtb`.
 
 Auto-boot hook (`/var/lib/webosbrew/init.d/20-android-boot`, dot-free, `run-parts` skips
 names containing a dot) exists only after gate G3 passes, and remains opt-in by flag file.
@@ -87,6 +96,13 @@ names containing a dot) exists only after gate G3 passes, and remains opt-in by 
 ---
 
 ## Phase 0: live survey (TV powered on, read-only)
+
+Status: DONE on 2026-11-02. Findings in `phase0-findings.md`, raw capture in
+`backup/phase0-survey.raw`, DTB in `backup/stock_tv.dtb` and `backup/stock_tv.dts`.
+
+Note from execution: busybox `tar` and `cp -r` cannot walk `/proc/device-tree` (it archives
+only the directory). The working method is to fetch `/sys/firmware/fdt` directly, which is
+the raw DTB, then `dtc -I dtb -O dts`. Keep that as the documented DT dump method.
 
 Recreate the helper environment first: `/tmp/opencode/pwnlg/venv` with paramiko, or plain
 `ssh` with password auth.
@@ -137,18 +153,20 @@ and nothing blocks on it. Software recovery plus LG dumps carry the risk.
 1. Pull LG kernel source for OTAID `HE_DTV_W20O_AFABABAA`, firmware 04.64.00, from the LG
    open-source portal. GPL release, matching this firmware.
 2. Confirm the source version matches `/proc/version` exactly.
-3. Build the stock config unchanged with the toolchain LG's build docs specify. Match the
-   compiler reported in `/proc/version`. Diff the resulting `vermagic` against
-   `/proc/version`. A clean match means out-of-tree modules load without
-   `--force-vermagic`. A mismatch means ABI problems and the project stops here honestly.
-4. Read LG's ION driver source (`drivers/staging/android/ion` or LG's custom ION variant)
-   and extract heap IDs, heap masks and named custom heaps. `mali_kbase.ko` references
-   `ion_alloc`, `ion_map`, `ion_flags`, `ion_id`, `ion_debugfs_init` and `tiler_heap_free`,
-   so the tiler heap needs explicit handling in the mapping table.
-5. Vendor firmware search: check whether LG shipped Android TV firmware on the O20B0 family
-   or a close sibling. If yes, reuse vendor gralloc, hwcomposer and audio HAL plus the
-   kernel config that already enables Android options. If no matching build exists, report
-   that and write our own HALs instead of forcing a mismatched vendor HAL onto this chip.
+3. Build the stock config unchanged with the toolchain LG's build docs specify. Phase 0 says
+   the kernel was built with gcc 8.2.0, so an aarch64 gcc 8.2 cross toolchain is the target.
+   Diff the resulting `vermagic` against `/proc/version`. A clean match means out-of-tree
+   modules load without `--force-vermagic`. A mismatch means ABI problems and the project
+   stops here honestly.
+4. Read LG's ION driver source, specifically `CONFIG_ION_LG1K`, and extract heap IDs, heap
+   masks and named custom heaps. `mali_kbase.ko` references `ion_alloc`, `ion_map`,
+   `ion_flags`, `ion_id`, `ion_debugfs_init` and `tiler_heap_free`, so the tiler heap needs
+   explicit handling in the mapping table.
+5. Vendor firmware search, narrowed by Phase 0: look for LG builds on the `lg1k` / LG1212
+   platform that ship Android TV, not any LG Android TV. If such a build exists, reuse its
+   gralloc, hwcomposer and audio HAL plus its kernel config that already enables Android
+   options. If nothing on this platform ships Android, report that and write our own fb-based
+   HALs instead of forcing a mismatched vendor HAL onto this chip.
 6. Decide `kexec_file_load` versus `kexec_load`, and build the Android DTB from the LG
    source tree rather than trusting kexec defaults.
 
@@ -162,23 +180,38 @@ If vermagic does not match, nothing downstream is attempted.
 
 ## Phase 2: Android kernel and kexec staging
 
-Kernel changes on top of LG source:
-- Binder IPC (binderfs preferred, legacy binder as fallback) and ashmem
-- ION kept as-is, dma-buf export path kept, tiler heap preserved
-- `CONFIG_KEXEC` or `CONFIG_KEXEC_FILE` enabled per Phase 0 findings
-- `CONFIG_PSTORE` plus `CONFIG_PSTORE_RAM`
-- mali kbase kept, DTV and CEC drivers kept for later phases
-- HDMI input handling kept
-- Watchdog handled so a kexec handoff does not trip a hardware reset
+Kernel changes on top of LG source, per Phase 0 findings:
+- Binder IPC built-in, `CONFIG_ANDROID_BINDER_IPC=y` plus `CONFIG_ANDROID_BINDERFS=y`, and
+  `CONFIG_ASHMEM=y`. Stock has none of these, and modules are only a fallback.
+- LG's ION kept (`CONFIG_ION=y`, `CONFIG_ION_LG1K=y`) as the allocator path. No dma-buf
+  heaps exist in stock, so Android's legacy ION gralloc path is the target.
+- mali kbase kept as a platform device, with cmdline `hma=` and `lg1k.` parameters intact
+  and the DT `reserved-memory` carveouts preserved. There is no DT GPU node, so kbase probes
+  through LG's platform device code, not through the device tree.
+- `CONFIG_PSTORE` plus `CONFIG_PSTORE_RAM` enabled in our build. Stock has no pstore, so
+  panic traces otherwise rely on LG's dump drivers plus our log directory.
+- LG's `mmcoops` and `wdtlog` drivers carried into the Android build so crash dumps still
+  land somewhere webOS can read after a reboot.
+- Framebuffer console and `CONFIG_FB` kept, no DRM, since stock has no DRM at all.
+- Watchdog handled so a kexec handoff does not trip a hardware reset.
+- DTV and CEC drivers kept for the later tuner phase, unused for now.
+- SELinux is entirely ours to configure, since the webOS kernel exposes no SELinux interface.
+  Permissive through Phases 2-4, then denial collection, then enforcing with custom policy.
 
-Android cmdline diff versus stock: drop `resume=`, drop snapshot settings, drop webOS-only
-LG options that Android's drivers do not understand, keep `console=ttyAMA0` if UART is used,
-keep CMA and HMA sizing consistent with the DTB.
+Android cmdline versus stock: keep `hma=`, `lg1k.use_vmap`, `lg1k.o20_*`, `cma_on`,
+`vmalloc=`, `devtmpfs.mount=1`, `console=ttyAMA0`. Drop `resume=`, `snapshot`, `debugMode=`,
+`sbkey=`, `portProtection`, `ToolOpt`, `modelopt`, `hwopt`, `serialNum`, `ethaddr`,
+`lg1k.adc`, and the webOS-only root/squashfs arguments.
 
-Staging layout in `/var/lib/webosbrew/android/`:
-- `kernel/`, `initramfs/`, `rootfs/`, `dtb/`, `webos-kernel/` (copy used by
-  `pwnback-to-webos`), `logs/`
-- Image checksum manifest, so a corrupt stage never launches
+Staging layout in `/var/lib/webosbrew/android/`, sized to the 481 MB of free `/var`:
+- `images/` holding compressed kernel, initramfs, rootfs squashfs and DTB, target about
+  250 MB total
+- `logs/` written with `O_SYNC`
+- `webos-kernel/` copy used by `pwnback-to-webos`
+- `images/manifest.sha256`, so a corrupt stage never launches
+Android's rootfs is unpacked into RAM by the initramfs after webOS is gone, and `/data`
+stays in RAM during bring-up. That is what makes the storage limit workable: disk holds
+compressed images, RAM holds the running system.
 
 `pwnandroid.sh` pre-flight guards:
 - Android image checksums valid
@@ -231,12 +264,13 @@ Android kernel (already covered by G2's on-device test).
 ## Phase 4: graphics, audio and input (make-or-break)
 
 Graphics:
-- `mali_kbase.ko` loads in the Android kernel
-- gralloc allocates through the exact ION heap IDs and masks LG's ION driver exposes, and
-  those buffers must be accepted by `libmali.so.0.1` through the dma-buf export path
+- `mali_kbase.ko` loads in the Android kernel as LG's platform device, with cmdline `hma=`
+  regions and DT `reserved-memory` carveouts intact
+- gralloc allocates through LG's ION driver (`CONFIG_ION_LG1K`) using the exact heap IDs and
+  masks read from source in Phase 1, and those buffers must be accepted by `libmali.so.0.1`
 - `tiler_heap` handled explicitly in the mapping table
-- hwcomposer targets DRM (`libdrmadaptor.so`, `libdile_drm.so` in the staged blobs suggest
-  a DRM display path rather than plain fb): mode set, vsync, hotplug, HDMI input events
+- hwcomposer targets the framebuffer stack (`/dev/fb0`, `/dev/dc_fbdev`), since the stock
+  kernel has no DRM at all. Mode set, vsync, hotplug and HDMI input events all go through fb
 - EGL/GLES stack validated against `libmali.so.0.1` plus `libEGLfk.so` semantics
 
 Audio:
@@ -302,7 +336,7 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 
 | Gate | Pass condition | Blocks |
 |---|---|---|
-| G0 | Survey complete: arch, RAM, KEXEC support, ION presence, DRM nodes, Ethernet driver, crash dump offsets | Phase 1 |
+| G0 | DONE 2026-11-02. Survey complete: aarch64 Cortex-A55, 3 GiB RAM, `CONFIG_KEXEC=y`, `CONFIG_ION_LG1K=y`, framebuffer stack (no DRM), `snps,dwmac` Ethernet, LG dump params, DTB dumped | Phase 1 |
 | G1 | Reproducible stock kernel build, vermagic match, ION heap map extracted | Phases 2-3 |
 | G2 | Android boots to init plus sshd via kexec and returns to webOS | Graphics work |
 | G3 | Hang plus power cycle leaves readable logs plus LG crash dumps from webOS | Any auto-boot hook |
@@ -327,12 +361,14 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 
 ## Open items, in order
 
-1. TV powered on for Phase 0
+1. Wired Ethernet cable on the TV. `eth0` currently has no carrier, and it is the planned
+   debug path, so bring-up needs a cable rather than Wi-Fi
 2. LG kernel source for firmware 04.64.00 / `HE_DTV_W20O_AFABABAA`
-3. Toolchain identification from `/proc/version` plus LG build docs
-4. O20B0 sibling Android TV firmware check for vendor HAL reuse
-5. Optional internal UART pin hunt when the chassis is open
-6. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
+3. aarch64 gcc 8.2 cross toolchain to match `/proc/version`, plus LG's build docs
+4. `lg1k` / LG1212 Android TV firmware check for vendor HAL reuse (narrowed by Phase 0)
+5. AOSP trim decisions so the compressed rootfs fits inside roughly 250 MB of `/var`
+6. Optional internal UART pin hunt when the chassis is open
+7. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
 
 ---
 
@@ -340,7 +376,13 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 
 The plan is reachable, but the honest failure point is Gate G4. ION heap alignment with
 `mali_kbase` plus `libmali` is the whole ballgame, and vendor HAL reuse may or may not be
-available for the O20B0 family. Everything before G4 is plumbing we can verify safely.
+available for the `lg1k` platform. Everything before G4 is plumbing we can verify safely.
 Everything after G4 depends on LG's proprietary graphics stack cooperating with Android's
 allocator. If G4 fails, the truthful outcome is "bare-metal Android on this firmware is not
 achievable without LG's own Android TV HALs for this chip", and we stop there.
+
+The secondary constraint is storage, not graphics. `/var` has 481 MB free, so the whole
+Android footprint must be compressed images plus RAM unpacking. If a usable trimmed AOSP
+will not fit that budget, the honest outcome is "this TV can boot Android only with a
+heavily trimmed build", and that trim must be decided before we sink hours into an AOSP
+build that cannot land.

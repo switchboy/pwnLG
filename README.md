@@ -201,6 +201,8 @@ TV must be idle for app launch, Dev Mode app must be gone before first reboot.
 | `successfulUpdateDisabled.md` | update-blocking procedure |
 | `androidTvFeasibility.md` | Android TV port feasibility study |
 | `androidBootPlan.md` | Bare-metal Android TV bring-up plan: opt-in `kexec`, AOSP arm64, ION/gralloc alignment, recovery layers, milestone gates |
+| `phase0-survey.sh` | Read-only on-TV capability survey script (Phase 0) |
+| `phase0-findings.md` | Phase 0 results: platform, kernel config, storage limits, DTB carveouts, plan amendments |
 
 Deliberately **not** committed: device backups, hardware blobs, credentials,
 `context.md` (contains device-specific identifiers).
