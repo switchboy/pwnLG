@@ -81,8 +81,11 @@ webOS is gone, and `/data` stays in RAM for the bring-up phase.
 4. `CONFIG_PSTORE` is absent in stock, so panic traces rely on LG's `mmcoops`/`wdtlog`
    drivers plus our log directory. We enable pstore in our Android kernel build, and carry
    LG's mmcoops/wdtlog drivers into it so dumps still land where webOS can read them.
-5. Staging must be compressed images in `/var` plus RAM unpacking, not a multi-GB rootfs on
-   disk. `/data` in RAM during bring-up.
+5. Storage design revised: an 8 GB USB stick becomes the Android storage location, because
+   `/var` has only 481 MB free. Two partitions: FAT32 or exFAT for images, logs and the webOS
+   kernel copy (webOS-visible), ext4 for Android `/data` (Android-only). Android mounts the
+   squashfs system image read-only from the stick instead of unpacking a rootfs into RAM.
+   Pulling the stick removes Android and changes nothing on TV flash.
 6. `kexec_load` is the available interface (no `CONFIG_KEXEC_FILE`), so the DTB must be
    passed explicitly with `--dtb=`, using the dump we already have.
 7. Android cmdline keeps `hma=`, `lg1k.` parameters, `cma_on`, `vmalloc=`, `console=ttyAMA0`
@@ -95,9 +98,14 @@ webOS is gone, and `/data` stays in RAM for the bring-up phase.
 
 ## Still needed before Phase 1
 
+- An 8 GB USB stick, USB 3.x with honest sustained throughput, plugged into a recorded port.
+  Phase 0.5 verifies webOS mount support, throughput and stable device naming
 - Wired Ethernet cable on the TV, since `eth0` currently has no carrier and it is the
   planned debug path
 - LG kernel source for firmware 04.64.00 on this OTAID, plus a gcc 8.2 aarch64 cross
   toolchain to match `/proc/version`
-- Decision on how much of AOSP to trim so the compressed rootfs fits in about 250 MB in
-  `/var`
+- AOSP trim decisions, mostly to keep the squashfs system image under the FAT 4 GB single-file
+  limit if webOS only mounts FAT32
+
+Note: the TV became unreachable over SSH at the end of the Phase 0 run (3 packets, 100%
+loss). It was likely standby or Wi-Fi drop. Re-check before Phase 0.5.

@@ -19,6 +19,9 @@ persistence), `pwnblock.sh` / `telemetry-block.sh` (boot hooks).
    arms Android automatically.
 4. No hardware serial assumed. Recovery is built from software layers plus LG's own
    crash dumps. Checking internal UART pins is optional, not a gate.
+5. An 8 GB USB memory stick is a hard requirement for Android storage, because the TV's
+   flash has only 481 MB free. The stick holds images, logs, the webOS kernel copy and
+   `/data`. Pulling it removes Android entirely.
 
 ---
 
@@ -38,7 +41,7 @@ persistence), `pwnblock.sh` / `telemetry-block.sh` (boot hooks).
 | Phase 0 confirmed: `CONFIG_ION=y` plus `CONFIG_ION_LG1K=y`, no dma-buf heaps in stock config | Gralloc targets LG's ION driver through Android's legacy ION path, not dma-buf heaps. |
 | Phase 0 confirmed: `CONFIG_KEXEC=y` but no `CONFIG_KEXEC_FILE` | `kexec_load` only, so the DTB must be passed explicitly with `--dtb=`. |
 | Phase 0 confirmed: `CONFIG_MODULE_SIG is not set` | Unsigned modules load, which keeps an out-of-tree fallback open. Primary plan is built-in binder and ashmem in our kernel. |
-| Phase 0 confirmed: `/var` has only 481 MB free | A full AOSP rootfs cannot live on disk. Compressed images in `/var`, unpacked into RAM by the Android initramfs, `/data` in RAM during bring-up. |
+| Phase 0 confirmed: `/var` has only 481 MB free | A full AOSP rootfs cannot live on the TV's flash. **Revision: an 8 GB USB memory stick is now a hard requirement** for Android storage. See the storage design below. |
 | DTB declares `kdrv_buffer1@1` (0x33800000, 1.24 GB) and `kdrv_buffer2@2` (0xa9800000, 360 MB) as `no-map` carveouts | These are LG's CMA and HMA regions. Our Android kernel reuses them instead of inventing new reserved regions, and keeps cmdline `hma=` plus `lg1k.` parameters because LG's kbase probes as a platform device with no DT GPU node. |
 | DTB declares 4x Cortex-A55, `nproc` reports 3 online, 3 GiB physical RAM | arm64 with NEON, AES, SHA1/SHA2, atomics. Memory budget for Android is about 2.4 GB once webOS is gone. |
 | DTB declares `lge,lg115x-dwmac` plus `ethernet-phy-id0044.1400` | Wired Ethernet bring-up is standard `snps,dwmac` work. `eth0` currently has no carrier, so the TV needs a cable for the debug path. |
@@ -68,6 +71,8 @@ the dump from `backup/stock_tv.dtb`.
 
 Auto-boot hook (`/var/lib/webosbrew/init.d/20-android-boot`, dot-free, `run-parts` skips
 names containing a dot) exists only after gate G3 passes, and remains opt-in by flag file.
+It only arms when the stick is present and the manifest verifies, so a missing stick always
+falls back to plain webOS boot.
 
 ---
 
@@ -76,10 +81,12 @@ names containing a dot) exists only after gate G3 passes, and remains opt-in by 
 1. LG kernel crash dumps: `wdtlog=dump@1M`, `mmcoops=dump`. Survive a kernel panic with
    no userspace alive. Readable from webOS after reboot. Partition offsets confirmed in
    Phase 0.
-2. Shared log directory: Android writes boot logs into
-   `/var/lib/webosbrew/android/logs/`, which webOS can read after rebooting back.
-   Files opened with `O_SYNC`, plus a periodic `sync` from the logging daemon, so a freeze
-   does not leave truncated or zero-byte logs.
+2. Shared log directory on the USB stick: Android writes boot logs to
+   `pwnandroid/logs/` on the stick's webOS-readable FAT/exFAT partition, so webOS can read
+   them after rebooting back with the stick still plugged. Files opened with `O_SYNC` plus a
+   periodic `sync` from the logging daemon, so a freeze does not leave truncated or zero-byte
+   logs. FAT has no journal, so a hard hang can still lose the last few lines. The LG dump
+   drivers cover the gap where userspace never ran.
 3. Early dropbear in Android init, started in the core class before hwcomposer and
    surfaceflinger, so a crashing graphics HAL cannot block shell access. Key is the
    existing `pwn_ed25519` key, no default password on the LAN.
@@ -140,7 +147,31 @@ metal is unreachable on this firmware and we say so instead of building somethin
 
 ---
 
-## Phase 0.5: optional UART hunt
+## Phase 0.5: USB stick verification (needs TV on and the stick plugged)
+
+This is a gate, not a nice-to-have, because the whole storage design depends on it.
+
+Checks, all read-only:
+- Plug the stick into a specific port and record which port. Front ports are easier to reach
+  for bring-up iterations
+- `ls /dev/sd*`, `cat /proc/partitions`, `ls /sys/class/net` unaffected, `mount` output to see
+  how webOS mounts USB drives and what fstypes it accepts
+- Confirm webOS can mount FAT32 or exFAT on partition 1. If webOS only mounts FAT32, use
+  FAT32 and accept the 4 GB single-file limit by splitting the squashfs image into parts
+- Write and read back a 200 MB test file on partition 1 to measure sustained throughput, and
+  time a `dd` read so we know the boot cost before committing to the stick
+- Confirm the stick's PARTUUID or serial is stable across reboots and across replugging into
+  the same port
+- Confirm Android's kernel build will see it: enable `CONFIG_USB_STORAGE`, SCSI, and the host
+  controller support in our build. Stock USB is present (`usbcore.wisa` in the cmdline), so
+  the host side works
+- Confirm webOS does not auto-mount or auto-index the ext4 partition, and that its media
+  scanner does not crawl the FAT partition while Android is running
+
+Gate G0b: stick mountable by webOS on partition 1, throughput measured, device naming stable,
+Android kernel USB storage support enabled. Nothing downstream is attempted before this passes.
+
+## Phase 0.6: optional UART hunt
 
 Open the chassis only if we want it. Look for TX/RX pads or a header on the O20B0
 mainboard, 115200 8N1, level-safe (no 5V tolerance assumptions). Not a gate, not required,
@@ -201,23 +232,53 @@ Kernel changes on top of LG source, per Phase 0 findings:
 Android cmdline versus stock: keep `hma=`, `lg1k.use_vmap`, `lg1k.o20_*`, `cma_on`,
 `vmalloc=`, `devtmpfs.mount=1`, `console=ttyAMA0`. Drop `resume=`, `snapshot`, `debugMode=`,
 `sbkey=`, `portProtection`, `ToolOpt`, `modelopt`, `hwopt`, `serialNum`, `ethaddr`,
-`lg1k.adc`, and the webOS-only root/squashfs arguments.
+`lg1k.adc`, and the webOS-only root/squashfs arguments. Add Android's own root arguments
+pointing at the stick by PARTUUID, never at `/dev/sdXN`, because USB enumeration order is not
+stable. The system image mounts read-only as squashfs and the ext4 partition mounts as
+`/data`.
 
-Staging layout in `/var/lib/webosbrew/android/`, sized to the 481 MB of free `/var`:
-- `images/` holding compressed kernel, initramfs, rootfs squashfs and DTB, target about
-  250 MB total
-- `logs/` written with `O_SYNC`
-- `webos-kernel/` copy used by `pwnback-to-webos`
-- `images/manifest.sha256`, so a corrupt stage never launches
-Android's rootfs is unpacked into RAM by the initramfs after webOS is gone, and `/data`
-stays in RAM during bring-up. That is what makes the storage limit workable: disk holds
-compressed images, RAM holds the running system.
+Storage design, revised: the Android footprint lives on a USB stick, not on TV flash.
+
+Requirements for the stick:
+- 8 GB or more. Usable budget: about 2 GB system image, 2 GB `/data`, 50 MB images plus
+  logs, rest spare for build iterations
+- USB 3.x stick with honest sustained throughput. Boot reads the system image over USB, so a
+  slow stick turns boot into several minutes. Avoid no-name sticks, fake capacity is common
+- Two partitions, because webOS and Android need different filesystems:
+  - partition 1, FAT32 or exFAT, mounted by webOS for staging, logs and the webOS kernel
+    copy. webOS media/USB mounting typically supports FAT and NTFS, not ext4, so the
+    webOS-visible half must not be ext4
+  - partition 2, ext4 with a journal, mounted only by Android as `/data`. webOS will not
+    mount it, which is exactly what we want: webOS never touches Android state
+- Stable device naming. USB enumeration order can shift, so Android uses a PARTUUID or disk
+  serial in its `root=` and `/data=` arguments rather than `/dev/sda1`
+- The stick stays in a specific port. Mark it, and record the port, because enumeration and
+  the PARTUUID depend on which port it lands in
+
+Layout on partition 1 (webOS-visible, FAT/exFAT):
+- `pwnandroid/images/` kernel, initramfs, rootfs squashfs, DTB, `manifest.sha256`
+- `pwnandroid/logs/` written by Android with `O_SYNC`, readable from webOS after a reboot
+- `pwnandroid/webos-kernel/` copy used by `pwnback-to-webos`
+- `pwnandroid/state/` last boot outcome, guard flag, version stamps
+
+Layout on partition 2 (Android-only, ext4): mounted as `/data`.
+
+What this changes operationally:
+- Images are copied from the PC onto the stick over the network, so the TV's 481 MB of free
+  `/var` is never used for Android storage at all
+- Android mounts the stick's squashfs system image read-only instead of unpacking a rootfs
+  into RAM, which frees RAM for ART and SurfaceFlinger
+- Pulling the stick makes Android unavailable, and webOS keeps booting normally. That is the
+  revertible state, and it means no TV partition ever holds Android bits
+- `pwnandroid.sh` refuses to boot if the stick is missing, the manifest does not verify, or
+  the guard flag says the last boot failed hard
 
 `pwnandroid.sh` pre-flight guards:
 - Android image checksums valid
 - Log directory writable
 - Previous boot logged a hard failure unless the operator cleared the guard
-- Refuses to touch any partition other than the staging directory
+- Refuses to boot if the stick is missing or the manifest does not verify, and refuses to
+  touch any TV flash partition. All Android bits live on the stick
 
 `pwnandroid.sh` boot: `kexec -l <image> --dtb=<dtb> --append="<android cmdline>"` then
 `kexec -e`.
@@ -253,8 +314,8 @@ Trimmed configuration:
   context, not a stock shell domain, because pty and socket binds are what typically get
   denied when enforcing starts.
 
-Deliverables: device folder, build recipe, trimmed manifest, sepolicy stubs, rootfs build
-into the staging directory.
+Deliverables: device folder, build recipe, trimmed manifest, sepolicy stubs, squashfs system
+image and initramfs written onto the stick's FAT partition by the staging script.
 
 Gate G3.5: rootfs plus initramfs build reproducibly on the PC and boot into init under the
 Android kernel (already covered by G2's on-device test).
@@ -295,17 +356,20 @@ Gate G5: SurfaceFlinger plus HDMI input on screen, audio HAL alive, Android TV a
 
 ## Phase 5: command-line workflow (the product surface)
 
-1. `ssh -p 22 -i pwn_ed25519 root@<TV-IP>` into webOS
-2. `pwnandroid.sh --check`: image checksums, HAL presence, log directory, guard state, last
-   boot outcome
-3. `pwnandroid.sh`: kexec into Android
-4. `ssh -p 22 -i pwn_ed25519 root@<TV-IP>` into Android dropbear, or adb on 5555
-5. `pwnback-to-webos`: kexec back, or power cycle if Android hangs hard
-6. Reboot into webOS, then read `/var/lib/webosbrew/android/logs/` to see exactly how far
-   Android got
+1. Stick plugged into the recorded port, TV booted into webOS
+2. `ssh -p 22 -i pwn_ed25519 root@<TV-IP>` into webOS
+3. `pwnandroid.sh --check`: stick present, manifest verified, guard state, last boot outcome,
+   measured boot cost, webOS mount state for the FAT partition
+4. `pwnandroid.sh`: unmounts the stick cleanly in webOS, then `kexec -l` with `--dtb=` and
+   `--append=`, then `kexec -e`
+5. `ssh -p 22 -i pwn_ed25519 root@<TV-IP>` into Android dropbear, or adb on 5555
+6. `pwnback-to-webos`: kexec back, or power cycle if Android hangs hard. The stick stays put,
+   so logs survive either way
+7. Reboot into webOS, read `pwnandroid/logs/` on the stick to see exactly how far Android got
 
-Deliverables: `pwnandroid.sh`, `pwnback-to-webos`, `phase0-survey.sh`, staging layout,
-guard logic, `pwnAndroidGuide.md` written noob-friendly like `pwnPatchGuide.md`.
+Deliverables: `pwnandroid.sh`, `pwnback-to-webos`, `phase0-survey.sh`, stick layout and
+formatting recipe, guard logic, `pwnAndroidGuide.md` written noob-friendly like
+`pwnPatchGuide.md`.
 
 ---
 
@@ -319,7 +383,12 @@ guard logic, `pwnAndroidGuide.md` written noob-friendly like `pwnPatchGuide.md`.
 - Early-SSH test: deliberately broken gralloc, verify dropbear still gives a shell
 - Crash dump test: force a kernel panic, verify LG `wdtlog`/`mmcoops` regions are readable
   after reboot into webOS
-- Guard test: corrupt a staged image, confirm `pwnandroid.sh` refuses to boot it
+- Guard test with a missing stick: unplug the stick, confirm `pwnandroid.sh` refuses to boot
+- Guard test with a corrupt image: break a checksum in the manifest, confirm refusal
+- Stick port discipline: replug into a different port, confirm PARTUUID-based boot still
+  resolves and `/dev/sdXN` assumptions are nowhere in the cmdline or scripts
+- Clean unmount test: confirm webOS unmounts the FAT partition before kexec, so a hard hang
+  cannot leave dirty FAT state behind
 
 Gate G6: all of the above pass, repeatedly, with no partition writes.
 
@@ -337,6 +406,7 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 | Gate | Pass condition | Blocks |
 |---|---|---|
 | G0 | DONE 2026-11-02. Survey complete: aarch64 Cortex-A55, 3 GiB RAM, `CONFIG_KEXEC=y`, `CONFIG_ION_LG1K=y`, framebuffer stack (no DRM), `snps,dwmac` Ethernet, LG dump params, DTB dumped | Phase 1 |
+| G0b | USB stick verified: webOS mounts partition 1 (FAT/exFAT), throughput measured, PARTUUID stable across reboots and replug, Android kernel USB storage enabled, ext4 partition untouched by webOS | Phases 2-5 |
 | G1 | Reproducible stock kernel build, vermagic match, ION heap map extracted | Phases 2-3 |
 | G2 | Android boots to init plus sshd via kexec and returns to webOS | Graphics work |
 | G3 | Hang plus power cycle leaves readable logs plus LG crash dumps from webOS | Any auto-boot hook |
@@ -352,6 +422,13 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 - Never reinstall the Developer Mode app while rooted, never reboot while it is installed.
 - Never launch Android without the pre-flight guards, and never bypass vermagic with
   `--force-vermagic` in place of a real toolchain match.
+- Never put Android storage on TV flash partitions. The stick is the storage. `/var` holds
+  webOS data and must stay untouched by Android bits.
+- Never let webOS mount the Android ext4 partition, and never let Android mount webOS
+  partitions read-write.
+- Never address the stick as `/dev/sda1`. Always resolve it by PARTUUID or disk serial, and
+  always plug it into the recorded port.
+- Never leave the FAT partition mounted read-write in webOS across a kexec handoff.
 - Never enable SELinux enforcing before denial collection is done.
 - Never auto-boot Android before G3 passes.
 - Do not push LG proprietary blobs to the public repo.
@@ -361,14 +438,17 @@ path. This is a separate RE project with its own plan. Do not start it before G5
 
 ## Open items, in order
 
-1. Wired Ethernet cable on the TV. `eth0` currently has no carrier, and it is the planned
+1. An 8 GB USB stick, USB 3.x, honest capacity, plugged into a recorded port. This is now a
+   prerequisite for every storage step, and Phase 0.5 verifies it on the TV
+2. Wired Ethernet cable on the TV. `eth0` currently has no carrier, and it is the planned
    debug path, so bring-up needs a cable rather than Wi-Fi
-2. LG kernel source for firmware 04.64.00 / `HE_DTV_W20O_AFABABAA`
-3. aarch64 gcc 8.2 cross toolchain to match `/proc/version`, plus LG's build docs
-4. `lg1k` / LG1212 Android TV firmware check for vendor HAL reuse (narrowed by Phase 0)
-5. AOSP trim decisions so the compressed rootfs fits inside roughly 250 MB of `/var`
-6. Optional internal UART pin hunt when the chassis is open
-7. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
+3. LG kernel source for firmware 04.64.00 / `HE_DTV_W20O_AFABABAA`
+4. aarch64 gcc 8.2 cross toolchain to match `/proc/version`, plus LG's build docs
+5. `lg1k` / LG1212 Android TV firmware check for vendor HAL reuse (narrowed by Phase 0)
+6. AOSP trim decisions, mainly to keep the squashfs system image under the FAT single-file
+   limit if webOS only mounts FAT32
+7. Optional internal UART pin hunt when the chassis is open
+8. Build box with roughly 100 GB free on an SSD and 16 GB+ RAM for AOSP
 
 ---
 
@@ -381,8 +461,8 @@ Everything after G4 depends on LG's proprietary graphics stack cooperating with 
 allocator. If G4 fails, the truthful outcome is "bare-metal Android on this firmware is not
 achievable without LG's own Android TV HALs for this chip", and we stop there.
 
-The secondary constraint is storage, not graphics. `/var` has 481 MB free, so the whole
-Android footprint must be compressed images plus RAM unpacking. If a usable trimmed AOSP
-will not fit that budget, the honest outcome is "this TV can boot Android only with a
-heavily trimmed build", and that trim must be decided before we sink hours into an AOSP
-build that cannot land.
+The secondary constraint was storage, not graphics, and the USB stick resolves it. The
+residual risks are operational rather than architectural: a slow stick makes every boot
+iteration take minutes, FAT32 caps a single file at 4 GB so the system image may need
+splitting, and FAT has no journal so a hard hang can lose the tail of a log. All three are
+measured in Phase 0.5 before we sink hours into an AOSP build.
