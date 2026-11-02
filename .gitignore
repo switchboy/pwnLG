@@ -15,3 +15,6 @@ slopbro.zip
 # Runtime artifacts
 *.log
 *.bin
+
+# personal draft posts, not repo content
+redditPost.md

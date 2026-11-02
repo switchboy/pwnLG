@@ -200,6 +200,7 @@ TV must be idle for app launch, Dev Mode app must be gone before first reboot.
 | `removeAdsAttempt.md` / `successfulAdRemoval.md` | ad/home-slop removal log/report |
 | `successfulUpdateDisabled.md` | update-blocking procedure |
 | `androidTvFeasibility.md` | Android TV port feasibility study |
+| `androidBootPlan.md` | Bare-metal Android TV bring-up plan: opt-in `kexec`, AOSP arm64, ION/gralloc alignment, recovery layers, milestone gates |
 
 Deliberately **not** committed: device backups, hardware blobs, credentials,
 `context.md` (contains device-specific identifiers).
@@ -213,6 +214,9 @@ onto the stock kernel looks plausible: extracted blobs include `mali_kbase.ko`,
 an 18 MB Bifrost `libmali.so.0.1` DDK, framebuffer devices `/dev/fb0-fb3`, full
 ALSA and evdev, MT7668 WiFi modules. Hard part: a Bifrost gralloc/EGL HAL + display
 control RE. Full study: [`androidTvFeasibility.md`](androidTvFeasibility.md).
+
+Execution plan (opt-in `kexec` boot, AOSP arm64 TV build, ION heap alignment with
+`mali_kbase`, recovery layers, milestone gates): [`androidBootPlan.md`](androidBootPlan.md).
 
 ## Credits & license
 
