@@ -174,6 +174,10 @@ info "Applying patches (root) ..."
 out=$(devssh 'sh /tmp/pwnpatch.sh '"$FLAGS" 2>&1)
 printf '%s\n' "$out" | grep -q PWN_DONE && ok "Patches applied + root SSH server started (port 22)." \
   || { err "Patch step failed: $out"; exit 1; }
+if [ "$(rootssh 'id -u' 2>/dev/null)" != 0 ]; then
+    err "Root SSH on port 22 is not ready. Do NOT remove Developer Mode or reboot."
+    exit 1
+fi
 
 # ---- uninstall Dev Mode app BEFORE reboot -----------------------------------
 say ""

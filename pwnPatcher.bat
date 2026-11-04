@@ -25,7 +25,7 @@ echo Make sure: Developer Mode app installed, Dev Mode Status = ON, Key Server e
 set /p PIN=6-char passphrase from the Developer Mode app (case-sensitive): 
 
 set SSHOPTS=-p 9922 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8
-set ROOTSSH=ssh -p 22 -i pwn_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 root@%TV_IP%
+set ROOTSSH=ssh -p 22 -i pwn_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 root@%TV_IP%
 
 echo.
 echo Fetching SSH key from TV (port 9991)...
@@ -125,6 +125,7 @@ ssh %SSHOPTS% -i webos_rsa prisoner@%TV_IP% "cat > /tmp/pwn_pubkey.txt" < pwn_ed
 
 echo Applying patches (type passphrase one last time)...
 ssh %SSHOPTS% -i webos_rsa prisoner@%TV_IP% "sh /tmp/pwnpatch.sh %FLAGS%" | findstr PWN_DONE >nul || goto fail_patch
+%ROOTSSH% "id -u" | findstr /r "^0$" >nul || goto fail_ssh
 echo Root SSH server is now running on port 22 (your new key works - no passwords).
 
 echo.
@@ -183,6 +184,9 @@ echo ERROR: pushing scripts failed (wrong passphrase? Dev Mode ON?).
 goto end_fail
 :fail_patch
 echo ERROR: patch step failed. Re-run the patcher.
+goto end_fail
+:fail_ssh
+echo ERROR: root SSH on port 22 is not ready. Do NOT remove Developer Mode or reboot.
 goto end_fail
 :fail_wait
 echo ERROR: timeout waiting for Developer Mode app removal. Uninstall it on the TV, re-run patcher.

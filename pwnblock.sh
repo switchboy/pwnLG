@@ -149,10 +149,12 @@ fi
 # 4) Hosts blocklist: LG firmware-update endpoints resolve to localhost.
 #    Homebrew startup.sh bind-mounts a fresh /tmp/hosts onto /etc/hosts each boot.
 #    Do NOT block nsu.lge.com — that is the Content Store API (store search dies).
-grep -q 'snu-dev.lge.com' /etc/hosts 2>/dev/null || {
-  echo '127.0.0.1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
-  echo '::1 snu-dev.lge.com snu-ssl.lge.com' >> /etc/hosts
-  echo "hosts blocklist applied"
-}
+if grep -q 'snu-dev.lge.com' /etc/hosts 2>/dev/null; then
+    echo "hosts blocklist already present"
+elif (printf '127.0.0.1 snu-dev.lge.com snu-ssl.lge.com\n::1 snu-dev.lge.com snu-ssl.lge.com\n' >> /etc/hosts) 2>/dev/null; then
+    echo "hosts blocklist applied"
+else
+    echo "INFO: /etc/hosts is read-only; Homebrew startup applies update-domain blocks on next boot"
+fi
 
 echo "=== pwnblock done ==="
